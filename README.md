@@ -17,3 +17,4 @@ Several additional files are required to run the script without modifications:
 1. 'mvrdata.mat' contains the gradient similarity scores for gradients 1:3
 2. 'mediandata.mat' contains the questionnaire scores and distances between medians for each network combination
 3. 'roinetworks_lhrh.mat' contains the parcellation scheme.
+

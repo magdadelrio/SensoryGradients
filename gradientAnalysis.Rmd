@@ -1,0 +1,375 @@
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE)
+library('tidyverse')
+library('ggplot2')
+library('R.matlab')
+library('plyr')
+library('dplyr')
+library('broom')
+library('effectsize')
+library('car')
+library('fmsb')
+library('scatterplot3d') 
+library('ggridges')
+library('ggpubr')
+library('lme4')
+library('viridis')
+library('plot3D')
+library('rgl')
+library('mgcv')
+library('grid') 
+
+
+
+gradientdata <- readMat('.\\allgradients_n370.mat')
+mvrdata <- readMat('.\\mvrdata.mat')
+mediandata <- readMat('.\\mediandata.mat')
+
+
+```
+
+
+
+```{r data wrangle, echo=FALSE}
+
+roinetworks <- readMat('.\\roinetworks_lhrh.mat')
+roinetworks <- t(data.frame(roinetworks))
+roilabels <- unique(roinetworks)
+list_gNwMedian <- list()
+gNwMedian <- data.frame(matrix(, nrow=7, ncol=370))
+
+
+for (g in 1:3) {
+  thisGradient<- data.frame(gradientdata$g.aligned.all[,,g])
+  thisGradient <- thisGradient %>% mutate_if(is.character,as.numeric)
+  thisGradient<-data.frame(t(thisGradient),roinetworks)
+
+  
+  for (n in 1:7) {
+     gNwMedian[n,] <- thisGradient %>% filter(thisGradient[,371]==roilabels[n]) %>%  dplyr::summarise(across(where(is.numeric), ~ median(.x, na.rm = TRUE)))
+  }
+    list_gNwMedian[[g]] <- gNwMedian
+
+}
+
+
+#focus on first gradient
+gradientToPlot <- data.frame(t(list_gNwMedian[[1]]))
+names(gradientToPlot) <- c(roilabels)
+gradientToPlot <- gradientToPlot[ , order(names(gradientToPlot))]
+
+
+#add in questionnaire data
+mvrdata <- data.frame(mvrdata)
+names(mvrdata) <- c('subjectID', 'gender', 'age', 'AQtotal', 'AQsocial', 'AQswitch', 'AQdetail', 'AQcomm', 'AQimag', 'GSQtotal', 'simGradient1', 'simGradient2', 'simGradient3')
+
+
+gradientToPlot <- data.frame(gradientToPlot, mvrdata)
+
+
+gradientToPlotLong <- gradientToPlot %>%  pivot_longer(cols = Cont:Vis, names_to = 'network', values_to = 'median_gscore')
+
+
+#median split
+highaq_cutoff <- median(gradientToPlot$AQtotal) 
+highgsq_cutoff <- median(gradientToPlot$GSQtotal) 
+
+#by group
+gradientToPlotLong <- gradientToPlotLong %>% 
+  mutate(aqgroup = case_when(AQtotal > highaq_cutoff ~ "high",
+                        AQtotal <= highaq_cutoff  ~ "low"))
+
+gradientToPlotLong <- gradientToPlotLong %>% 
+  mutate(gsqgroup = case_when(GSQtotal > highgsq_cutoff ~ "high",
+                        GSQtotal <= highgsq_cutoff  ~ "low"))
+
+
+
+
+# facet labels
+gradientToPlotLong <- gradientToPlotLong %>% 
+    mutate(
+    network = dplyr::recode(network, Vis = 'Visual', 'SomMot' = 'Somatomotor', 'DorsAttn' ='Dorsal Attention', 'SalVentAttn' = 'Salience/\nVentral Attention', 'Cont' = 'Control'))
+  
+
+```
+
+
+```{r plot gradient medians, echo=FALSE}
+
+p <- ggplot(data=subset(gradientToPlotLong, !is.na(gsqgroup)), aes(x=factor(gsqgroup), y=median_gscore, colour = factor(gsqgroup))) + 
+  geom_jitter(position = position_jitter(height = 0, width = .1),
+              alpha = .5) + 
+  stat_summary(fun.y = mean, 
+               fun.ymin = function(x) (mean(x) - sd(x)/sqrt(length(x))), 
+               fun.ymax = function(x) (mean(x) + sd(x)/sqrt(length(x))), 
+               geom = 'pointrange',
+               color='#2F4F4F',
+               size = 0.7) +
+    facet_wrap(factor(network, levels=c('Visual', 'Somatomotor', 'Dorsal Attention', 'Salience/\nVentral Attention', 'Control', 'Limbic', 'Default'))~.,switch = 'y', scales = 'free', ncol=1)+
+  labs(x='', y = 'Median gradient score')+
+  theme(axis.text.y=element_blank(),axis.ticks.y=element_blank(), strip.text.y.left = element_text(angle = 0), legend.position = 'none')+
+  coord_flip()+
+  scale_colour_manual(name = '', labels = c('High GSQ', 'Low GSQ'),
+  values=c("#ef8a62","#67a9cf"))
+ 
+g_gsq <- grid.force(ggplotGrob(p))
+
+grobs_df <- do.call(cbind.data.frame, grid.ls(g_gsq, print = FALSE))
+grobs_df$gPath_full <- paste(grobs_df$gPath, grobs_df$name, sep = '::')
+grobs_df$gPath_full <- gsub(pattern = 'layout::', 
+                            replacement = '', 
+                            x = grobs_df$gPath_full, 
+                            fixed = TRUE)
+
+strip_bg_gpath <- grobs_df$gPath_full[grepl(pattern = '.*strip\\.background.*', 
+                                            x = grobs_df$gPath_full)]
+
+fills=c('#8DA0CB', '#66C2A5', '#e78ac3', '#e5c494', '#A6D854', '#fc8d62', '#FFD92F')
+
+for (i in 1:length(strip_bg_gpath)){
+  g_gsq <- editGrob(grob = g_gsq, gPath = strip_bg_gpath[i], gp = gpar(fill = fills[i]))
+}
+
+grid.newpage(); grid.draw(g_gsq)
+
+
+p <- ggplot(data=subset(gradientToPlotLong, !is.na(aqgroup)), aes(x=factor(aqgroup), y=median_gscore, colour = factor(aqgroup))) + 
+  geom_jitter(position = position_jitter(height = 0, width = .1),
+              alpha = .5) + 
+  stat_summary(fun.y = mean, 
+               fun.ymin = function(x) (mean(x) - sd(x)/sqrt(length(x))), 
+               fun.ymax = function(x) (mean(x) + sd(x)/sqrt(length(x))), 
+               geom = 'pointrange',
+               color='#2F4F4F',
+               size = 0.7) +
+  facet_wrap(factor(network, levels=c('Visual', 'Somatomotor', 'Dorsal Attention', 'Salience/\nVentral Attention', 'Control', 'Limbic', 'Default'))~.,switch = 'y', scales = 'free', ncol=1)+
+  labs(x='', y = 'Median gradient score')+
+  theme(axis.text.y=element_blank(),axis.ticks.y=element_blank(), strip.text.y.left = element_text(angle = 0), legend.position = 'none')+
+  coord_flip()+
+  scale_colour_manual(name = '', labels = c('High AQ', 'Low AQ'),
+                      values=c("#ef8a62","#67a9cf"))
+
+g_aq <- grid.force(ggplotGrob(p))
+grobs_df <- do.call(cbind.data.frame, grid.ls(g_aq, print = FALSE))
+grobs_df$gPath_full <- paste(grobs_df$gPath, grobs_df$name, sep = '::')
+grobs_df$gPath_full <- gsub(pattern = 'layout::', 
+                            replacement = '', 
+                            x = grobs_df$gPath_full, 
+                            fixed = TRUE)
+
+strip_bg_gpath <- grobs_df$gPath_full[grepl(pattern = '.*strip\\.background.*', 
+                                            x = grobs_df$gPath_full)]
+
+fills=c('#8DA0CB', '#66C2A5', '#e78ac3', '#e5c494', '#A6D854', '#fc8d62', '#FFD92F')
+
+for (i in 1:length(strip_bg_gpath)){
+  g_aq <- editGrob(grob = g_aq, gPath = strip_bg_gpath[i], gp = gpar(fill = fills[i]))
+}
+
+grid.newpage(); grid.draw(g_aq)
+
+
+ggarrange(g_aq, g_gsq, nrow = 2, labels = c('A', 'B'))
+
+
+
+```
+
+
+### Multivariate regression model – gradient similarity
+
+
+```{r mvregression, echo=FALSE}
+
+
+mod0<-lm(cbind(simGradient1, simGradient2, simGradient3) ~ age + gender + AQtotal + GSQtotal, data=mvrdata)
+summary(mod0)
+
+
+mod1<-lm(cbind(simGradient1, simGradient2, simGradient3) ~ age + gender + AQsocial + AQswitch + AQdetail + AQcomm + AQimag + GSQtotal, data=mvrdata)
+summary(mod1)
+
+
+fit<-lm(cbind(simGradient1, simGradient2, simGradient3) ~ age + gender + AQtotal + GSQtotal, data=mvrdata)
+summary(fit)
+
+
+# type I SS, the restricted model in a regression analysis for your first predictor c is the null-model which only uses the absolute term
+summary(manova(mod1)) 
+
+#type II SS, the unrestricted model in a regression analysis for your first predictor c is the full model which includes all predictors except for their interaction
+Manova(mod1, type='III') 
+
+fit<-lm(simGradient1 ~ age + gender + AQsocial + AQswitch + AQdetail + AQcomm + AQimag + GSQtotal, data=mvrdata)
+
+fit<-lm(simGradient2 ~ age + gender + AQsocial + AQswitch + AQdetail + AQcomm + AQimag + GSQtotal, data=mvrdata)
+
+fit<-lm(simGradient3 ~ age + gender + AQsocial + AQswitch + AQdetail + AQcomm + AQimag + GSQtotal, data=mvrdata)
+
+
+
+vif(fit) # variance inflation factor (multicollinearity metric 1)
+1/vif(fit) # tolerance (multicollinearity metric 2)
+
+
+
+```
+
+
+
+### Multiple regression model – effect of age and gender
+
+
+```{r regression median, echo=FALSE}
+
+mediandata <- data.frame(mediandata)
+names(mediandata) <- c('subjectID', 'gender', 'age', 'AQtotal', 'AQsocial', 'AQswitch', 'AQdetail', 'AQcomm', 'AQimag', 'GSQtotal', 'cont_median', 'default_median', 'dorsattn_median', 'limbic_median', 'salventattn_median', 'sommot_median', 'vis_median', 'defaultvis_median_diff')
+
+
+mod1<-lm(defaultvis_median_diff ~ age + gender + AQsocial + AQswitch + AQdetail + AQcomm + AQimag + GSQtotal, data=mediandata)
+summary(mod1)
+
+mod1<-lm(defaultvis_median_diff ~ age + gender + AQtotal + GSQtotal, data=mediandata)
+summary(mod1)
+
+
+mod2<-lm(defaultvis_median_diff ~ AQtotal + GSQtotal, data=mediandata)
+summary(mod2)
+
+
+# compare models
+aovtest <- anova(mod2, mod1)
+summary(aovtest)
+
+
+```
+
+### Schematic metric illustrations
+
+
+```{r metric illustration, echo=FALSE}
+
+
+#mock data
+g_a <- data.frame(x = rnorm(20, 5, 10), y = rnorm(20, 3, 8), z = rnorm(20, 7, 12))
+g_b <- data.frame(x = rnorm(20, 15, 5), y = rnorm(20, -10, 4), z = rnorm(20, -3, 3))
+
+median_a <- g_a %>% dplyr::summarise(across(where(is.numeric), ~ median(.x, na.rm = TRUE)))
+
+median_b <- g_b %>% dplyr::summarise(across(where(is.numeric), ~ median(.x, na.rm = TRUE)))
+
+
+g_a <- data.frame(g_a, seq(1:20))
+median_a_list <- data.frame(median_a[rep(seq_len(nrow(median_a)), each = 20), ], seq(20))
+names(median_a_list)[4] <- c('zip')
+names(g_a)[4] <- c('zip')
+
+g_a <- bind_rows(g_a, median_a_list) %>% 
+           arrange(zip)
+
+g_b <- data.frame(g_b, seq(1:20))
+median_b_list <- data.frame(median_b[rep(seq_len(nrow(median_b)), each = 20), ], seq(20))
+names(median_b_list)[4] <- c('zip')
+names(g_b)[4] <- c('zip')
+
+g_b <- bind_rows(g_b, median_b_list) %>% 
+           arrange(zip)
+
+
+# between-network dispersion
+median_both <- rbind(median_a_list[1,],median_b_list[1,])
+
+scatter3D(
+  x=unlist(g_a$x),  y=unlist(g_a$y),  z=unlist(g_a$z),
+  xlab=' ', ylab=' ', zlab=' ',
+  bty='g', pch=19, cex = 0.1,
+  col = c('#af8dc3'))+
+scatter3D(
+    x=unlist(median_a$x),    y=unlist(median_a$y),    z=unlist(median_a$z),
+    add = TRUE, colkey = FALSE,  
+    pch = 18, cex = 0.6, col = 'black')+
+scatter3D(
+  x=unlist(g_b$x),  y=unlist(g_b$y),  z=unlist(g_b$z),
+  add = TRUE, colkey = FALSE, cex = 0.1,
+  pch = 19, col ='#7fbf7b')+
+scatter3D(
+    x=unlist(median_b$x),    y=unlist(median_b$y),    z=unlist(median_b$z),
+    add = TRUE, colkey = FALSE, 
+    pch = 18, cex = 0.6, col = 'black')+
+scatter3D(
+    x=unlist(median_both$x),    y=unlist(median_both$y),    z=unlist(median_both$z),
+    type='l', lwd=0.6, 
+    add = TRUE, colkey = FALSE, 
+    pch = 18,  col = 'black')
+
+
+#eccentricity
+#lines to meta-centroid
+g_both <- rbind(g_a[seq(1,39, by=2),],g_b[seq(1,39, by=2),])
+origin <- data.frame(x=0,y=0,z=0)
+origin <- data.frame(origin[rep(seq_len(nrow(origin)), each = 40), ], seq(40))
+names(g_both)[4] <- c('zip')
+names(origin)[4] <- c('zip')
+g_both$zip <- seq(1:40)
+g_both <- bind_rows(g_both, origin) %>% 
+           arrange(zip)
+
+scatter3D(
+  x=unlist(g_a$x),  y=unlist(g_a$y),  z=unlist(g_a$z),
+  xlab=' ', ylab=' ', zlab=' ',
+  bty='g', pch=19, cex = 0.1,
+  col = c('#af8dc3'))+
+scatter3D(
+  x=unlist(g_b$x),  y=unlist(g_b$y),  z=unlist(g_b$z),
+  add = TRUE, colkey = FALSE,  cex = 0.1,
+  pch = 19, col ='#7fbf7b')+
+scatter3D(
+    x=0,    y=0,    z=0,
+    add = TRUE, colkey = FALSE, 
+    pch = 19, cex = 0.7, col = 'black')+
+scatter3D(
+    x=unlist(g_both[1:40,]$x),    y=unlist(g_both[1:40,]$y),    z=unlist(g_both[1:40,]$z),
+    type='l', lwd =0.6,
+    add = TRUE, colkey = FALSE, 
+    pch = 18, cex = 2, col = '#af8dc3')+
+scatter3D(
+    x=unlist(g_both[41:80,]$x),    y=unlist(g_both[41:80,]$y),    z=unlist(g_both[41:80,]$z),
+    type='l', lwd =0.6,
+    add = TRUE, colkey = FALSE, 
+    pch = 19, col ='#7fbf7b')
+
+
+#within-network dispersion
+scatter3D(
+  x=unlist(g_a$x),  y=unlist(g_a$y),  z=unlist(g_a$z),
+  xlab=' ', ylab=' ', zlab=' ',
+  bty='g', pch=19,  cex = 0.1,col = c('#af8dc3'))+
+scatter3D(
+  x=unlist(g_b$x),  y=unlist(g_b$y),  z=unlist(g_b$z),
+  add = TRUE, colkey = FALSE, 
+  pch = 19, cex = 0.1, col ='#7fbf7b')+
+scatter3D(
+    x=unlist(g_a$x),    y=unlist(g_a$y),    z=unlist(g_a$z),
+    type='l', lwd =0.6,
+    add = TRUE, colkey = FALSE,
+    pch = 18,  col = '#af8dc3')+
+scatter3D(
+    x=unlist(g_b$x),    y=unlist(g_b$y),    z=unlist(g_b$z),
+    type='l', lwd=0.6,
+    add = TRUE, colkey = FALSE,
+    pch = 19, col ='#7fbf7b')+
+scatter3D(
+    x=unlist(median_a$x),    y=unlist(median_a$y),    z=unlist(median_a$z),
+    add = TRUE, colkey = FALSE,
+    pch = 18, cex = 0.6, col = 'black') +
+scatter3D(
+    x=unlist(median_b$x),    y=unlist(median_b$y),    z=unlist(median_b$z),
+    add = TRUE, colkey = FALSE, 
+    pch = 18, cex = 0.6, col = 'black')
+
+
+
+
+```
